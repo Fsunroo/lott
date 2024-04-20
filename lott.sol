@@ -3,24 +3,31 @@ pragma solidity ^0.8.0;
 
 contract Lottery {
     struct Player {
-        address addr; // Player's Ethereum address
+        address addr;
         uint256 chances;
     }
 
-    Player[] public players;
-    uint256 public totalChances = 0;
-    uint256 public ticketPrice;
-    uint256 public totalCollected = 0;
-    mapping(uint => bool) private isWinner;
-    mapping(address => uint) public playerIndex;
+    struct WinnerDetail {
+        address winnerAddress;
+        uint256 prizeAmount;
+    }
+
+    struct Round {
+        uint256 ticketPrice;
+        uint256 totalCollected;
+        uint256 totalPlayers;
+        uint256 totalChances;
+        bool isActive;
+        WinnerDetail[] winnerDetails;
+    }
+
+    mapping(uint256 => Round) public rounds;
+    mapping(uint256 => Player[]) public roundPlayers;
+    uint256 public currentRoundId;
     address public owner;
 
-    uint[] public winners;
-    bool public winnersPicked = false;
-
-    constructor(uint256 _ticketPrice) {
+    constructor() {
         owner = msg.sender;
-        ticketPrice = _ticketPrice;
     }
 
     modifier onlyOwner() {
@@ -28,81 +35,137 @@ contract Lottery {
         _;
     }
 
-    function setTicketPrice(uint256 _ticketPrice) external onlyOwner {
-        ticketPrice = _ticketPrice;
+    function startRound(uint256 _ticketPrice) external onlyOwner {
+        require(currentRoundId == 0 || !rounds[currentRoundId].isActive, "Previous round still active");
+        currentRoundId++;
+        Round storage newRound = rounds[currentRoundId];
+        newRound.ticketPrice = _ticketPrice;
+        newRound.isActive = true;
     }
 
     function buyTickets(uint256 numTickets) external payable {
-        require(msg.value == numTickets * ticketPrice, "Incorrect amount sent");
-        if (playerIndex[msg.sender] == 0) {
-            playerIndex[msg.sender] = players.length + 1;
-            players.push(Player({addr: msg.sender, chances: numTickets}));
-        } else {
-            players[playerIndex[msg.sender] - 1].chances += numTickets;
+        require(rounds[currentRoundId].isActive, "No active round");
+        require(msg.value == numTickets * rounds[currentRoundId].ticketPrice, "Incorrect amount sent");
+
+        Player[] storage players = roundPlayers[currentRoundId];
+        bool found = false;
+
+        for (uint i = 0; i < players.length; i++) {
+            if (players[i].addr == msg.sender) {
+                players[i].chances += numTickets;
+                found = true;
+                break;
+            }
         }
-        totalChances += numTickets;
-        totalCollected += msg.value;
+        
+        if (!found) {
+            players.push(Player({
+                addr: msg.sender,
+                chances: numTickets
+            }));
+            rounds[currentRoundId].totalPlayers++;
+        }
+
+        rounds[currentRoundId].totalCollected += msg.value;
+        rounds[currentRoundId].totalChances += numTickets;
     }
 
-    function random(uint seed) private view returns (uint) {
-        return uint(keccak256(abi.encodePacked(block.timestamp, block.difficulty, msg.sender, seed)));
-    }
+    function pickWinners() view private returns (WinnerDetail[] memory) {
+        require(rounds[currentRoundId].isActive, "No active round");
+        require(roundPlayers[currentRoundId].length >= 10, "Not enough players to pick 10 winners");
 
-    function pickWinners() private returns (uint[] memory) {
-        require(players.length >= 10, "Not enough players to pick 10 winners");
-        uint[] memory _winners = new uint[](10);
-        uint remainingChances = totalChances;
+        Player[] storage players = roundPlayers[currentRoundId];
+        uint[] memory indices = new uint[](10);
+        WinnerDetail[] memory details = new WinnerDetail[](10);
+        uint totalChances = rounds[currentRoundId].totalChances;
         uint winnersCount = 0;
 
         while (winnersCount < 10) {
-            uint r = random(winnersCount) % remainingChances;
+            uint r = uint(keccak256(abi.encodePacked(block.timestamp, block.difficulty, msg.sender, winnersCount))) % totalChances;
             uint cumulative = 0;
 
             for (uint i = 0; i < players.length; i++) {
-                if (!isWinner[i]) {
-                    cumulative += players[i].chances;
-                    if (r < cumulative) {
-                        _winners[winnersCount] = i;
-                        isWinner[i] = true;
-                        remainingChances -= players[i].chances;
-                        winnersCount++;
-                        break;
-                    }
+                cumulative += players[i].chances;
+                if (r < cumulative) {
+                    indices[winnersCount] = i;
+                    totalChances -= players[i].chances;
+                    winnersCount++;
+                    break;
                 }
             }
         }
-        winners = _winners; // Assign to the public array
-        winnersPicked = true;
-        return winners;
+
+        uint ownerPrize = rounds[currentRoundId].totalCollected / 10;
+        uint remainingPrize = rounds[currentRoundId].totalCollected - ownerPrize;
+        uint[] memory prizes = new uint[](10);
+        prizes[0] = remainingPrize * 30 / 100;  // 1st
+        prizes[1] = remainingPrize * 20 / 100;  // 2nd
+        prizes[2] = remainingPrize * 15 / 100;  // 3rd
+        prizes[3] = remainingPrize * 10 / 100;  // 4th
+        for (uint i = 4; i < 10; i++) {
+            prizes[i] = remainingPrize * 25 / 6 / 100; // Evenly split the remaining 25%
+        }
+
+        for (uint i = 0; i < indices.length; i++) {
+            details[i] = WinnerDetail({
+                winnerAddress: players[indices[i]].addr,
+                prizeAmount: prizes[i]
+            });
+        }
+
+        return details;
     }
 
     function givePrizes() external onlyOwner {
-        require(!winnersPicked, "Winners have already been picked and awarded");
-        uint[] memory _winners = pickWinners();
-        uint ownerPrize = (totalCollected * 10) / 100;
-        uint remainingPrize = totalCollected - ownerPrize;
-        uint[] memory prizes = new uint[](10);
-        prizes[0] = (remainingPrize * 30) / 100;  // 1st
-        prizes[1] = (remainingPrize * 20) / 100;  // 2nd
-        prizes[2] = (remainingPrize * 15) / 100;  // 3rd
-        prizes[3] = (remainingPrize * 10) / 100;  // 4th
-        for (uint i = 4; i < 10; i++) { // 5th to 10th
-            prizes[i] = (remainingPrize * 25) / (10 - 4) / 100; // Evenly split the remaining 25%
+        require(rounds[currentRoundId].isActive, "No active round");
+        WinnerDetail[] memory winners = pickWinners();
+        Round storage round = rounds[currentRoundId];
+        for (uint i = 0; i < winners.length; i++) {
+            payable(winners[i].winnerAddress).transfer(winners[i].prizeAmount);
+        }
+        payable(owner).transfer(round.totalCollected / 10); // Transfer 10% to the owner
+
+        // Manual copying of winner details to storage
+        delete round.winnerDetails; // Clear the existing array
+        for (uint i = 0; i < winners.length; i++) {
+            round.winnerDetails.push(winners[i]);
         }
 
-        for (uint i = 0; i < _winners.length; i++) {
-            payable(players[_winners[i]].addr).transfer(prizes[i]);
-            isWinner[_winners[i]] = false; // Reset winner status if needed
-        }
-        payable(owner).transfer(ownerPrize); // Transfer 10% to the owner
-        totalCollected = 0; // Reset the collected amount
+        round.isActive = false; // Deactivate the round
     }
 
-    function getWinners() public view returns (uint[] memory) {
-        if (winnersPicked) {
-            return winners;
-        } else {
-            revert("Winners have not been picked yet, the game is still running.");
+    function isAnyRoundActive() public view returns (bool) {
+        if (currentRoundId == 0) return false;
+        return rounds[currentRoundId].isActive;
+    }
+
+    function getRoundDetails(uint256 roundId) public view returns (uint256, uint256, uint256, uint256, bool) {
+        Round storage round = rounds[roundId];
+        return (
+            round.ticketPrice,
+            round.totalCollected,
+            round.totalPlayers,
+            round.totalChances,
+            round.isActive
+        );
+    }
+
+    function getWinnerCount(uint256 roundId) public view returns (uint256) {
+        return rounds[roundId].winnerDetails.length;
+    }
+
+    function getWinnerDetail(uint256 roundId, uint256 winnerIndex) public view returns (address, uint256) {
+        WinnerDetail storage winner = rounds[roundId].winnerDetails[winnerIndex];
+        return (winner.winnerAddress, winner.prizeAmount);
+    }
+
+    function getPlayerDetails(uint256 roundId, address playerAddress) public view returns (uint256 chances, uint256 index) {
+        Player[] storage players = roundPlayers[roundId];
+        for (uint i = 0; i < players.length; i++) {
+            if (players[i].addr == playerAddress) {
+                return (players[i].chances , i);
+            }
         }
+        revert("Player not found in the specified round.");
     }
 }
