@@ -9,10 +9,11 @@ contract Lottery {
 
     Player[] public players;
     uint256 public totalChances = 0;
+    mapping(uint => bool) private isWinner;
     address public owner;
 
     constructor() {
-        owner = msg.sender; // Set the owner to the address that deploys the contract
+        owner = msg.sender;
     }
 
     modifier onlyOwner() {
@@ -20,54 +21,51 @@ contract Lottery {
         _;
     }
 
-    // Function to add players, restricted to onlyOwner
     function addPlayers(uint256[] calldata fids, uint256[] calldata chances) external onlyOwner {
         require(fids.length == chances.length, "Fids and chances length mismatch");
 
         for (uint i = 0; i < fids.length; i++) {
-            players.push(Player({
-                fid: fids[i],
-                chances: chances[i]
-            }));
+            players.push(Player({fid: fids[i], chances: chances[i]}));
             totalChances += chances[i];
         }
     }
 
-    // Basic random number generator
-    function random() private view returns (uint256) {
-        return uint256(keccak256(abi.encodePacked(block.difficulty, block.timestamp, totalChances)));
-    }
+ function random(uint seed) private view returns (uint) {
+    return uint(keccak256(abi.encodePacked(block.timestamp, block.difficulty, msg.sender, seed)));
+}
 
-    // Function to pick 10 winners, restricted to onlyOwner
-    function pickWinners() external onlyOwner returns (uint256[10] memory) {
-        uint256[10] memory winners;
-        uint256 winnerCount = 0;
-        uint256 drawChances = totalChances;
 
-        while(winnerCount < 10) {
-            uint256 rand = random() % drawChances;
-            uint256 sum = 0;
+    // Updated pickWinners function that safely handles output
+    function pickWinners() public returns (uint[] memory) {
+        require(players.length >= 10, "Not enough players to pick 10 winners");
+        uint[] memory winners = new uint[](10);
+        uint remainingChances = totalChances;
+        uint winnersCount = 0;
+
+        while (winnersCount < 10) {
+            uint r = random(winnersCount) % remainingChances;
+            uint cumulative = 0;
 
             for (uint i = 0; i < players.length; i++) {
-                sum += players[i].chances;
-                if (rand < sum) {
-                    bool alreadyWon = false;
-                    for(uint j = 0; j < winnerCount; j++) {
-                        if(winners[j] == players[i].fid) {
-                            alreadyWon = true;
-                            break;
-                        }
-                    }
-                    if(!alreadyWon) {
-                        winners[winnerCount] = players[i].fid;
-                        winnerCount++;
+                if (!isWinner[i]) { // Only consider players who haven't won yet
+                    cumulative += players[i].chances;
+                    if (r < cumulative) {
+                        winners[winnersCount] = players[i].fid;
+                        isWinner[i] = true; // Mark this player as a winner
+                        remainingChances -= players[i].chances; // Reduce the pool of chances
+                        winnersCount++;
                         break;
                     }
                 }
             }
-            drawChances = drawChances - sum;
+        }
+
+        // Reset isWinner mapping for future draws (optional depending on use case)
+        for (uint i = 0; i < winners.length; i++) {
+            isWinner[winners[i]] = false;
         }
 
         return winners;
     }
+
 }
