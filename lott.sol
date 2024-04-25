@@ -168,4 +168,29 @@ contract Lottery {
         }
         revert("Player not found in the specified round.");
     }
+
+    function cancelRound() external onlyOwner {
+        require(rounds[currentRoundId].isActive, "No active round to cancel");
+
+        Round storage round = rounds[currentRoundId];
+        Player[] storage players = roundPlayers[currentRoundId];
+
+        // Refund each player's money
+        for (uint i = 0; i < players.length; i++) {
+            uint256 refundAmount = players[i].chances * round.ticketPrice;
+            payable(players[i].addr).transfer(refundAmount);
+        }
+
+        // Reset the winner details
+        delete round.winnerDetails;
+        for (uint i = 0; i < 10; i++) {
+            round.winnerDetails.push(WinnerDetail({
+                winnerAddress: 0x0000000000000000000000000000000000000000, // Placeholder address
+                prizeAmount: 0
+            }));
+        }
+
+        round.isActive = false; // Deactivate the round
+    }
+
 }
