@@ -176,10 +176,12 @@ contract Lottery {
         Player[] storage players = roundPlayers[currentRoundId];
 
         // Refund each player's money
-        for (uint i = 0; i < players.length; i++) {
-            uint256 refundAmount = players[i].chances * round.ticketPrice;
-            payable(players[i].addr).transfer(refundAmount);
-        }
+        if (players.length > 0) {
+            for (uint i = 0; i < players.length; i++) {
+                uint256 refundAmount = players[i].chances * round.ticketPrice;
+                payable(players[i].addr).transfer(refundAmount);
+            }
+    }
 
         // Reset the winner details
         delete round.winnerDetails;
